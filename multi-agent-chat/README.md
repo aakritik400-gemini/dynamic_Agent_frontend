@@ -75,7 +75,6 @@ The application communicates with a backend API at `http://127.0.0.1:8000`. Key 
 - `GET /agents` – Fetch all available agents
 - `POST /agents` – Create a new agent
 - `PUT /agents/{id}` – Update an existing agent
-- `DELETE /agents/{id}` – Delete an agent
 - `POST /agents/{id}/ask` – Send a message to an agent
 
 To change the API base URL, modify the `baseURL` in [src/api.js](src/api.js).
