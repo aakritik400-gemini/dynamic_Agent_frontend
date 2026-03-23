@@ -18,6 +18,8 @@ export default function CreateAgent({
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [editAgentId, setEditAgentId] = useState(agentId ? String(agentId) : "");
+  const [nameError, setNameError] = useState("");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     if (agentsProp) return;
@@ -26,40 +28,54 @@ export default function CreateAgent({
 
   const agents = agentsProp ?? agentsLocal;
   const effectiveEditId = mode === "edit" ? (agentId ? String(agentId) : editAgentId) : null;
-  const effectiveInitialAgent =
-    mode === "edit" && effectiveEditId
-      ? agents.find(a => String(a.id) === String(effectiveEditId)) ?? null
-      : null;
 
+  // Prevent self-handoff
+  const handoffCandidates = useMemo(() => {
+    if (mode !== "edit" || !effectiveEditId) return agents;
+    const selfId = Number(effectiveEditId);
+    return agents.filter(a => a.id !== selfId);
+  }, [agents, mode, effectiveEditId]);
+
+  // Load agent data in edit mode
   useEffect(() => {
     if (mode !== "edit") return;
+    if (!effectiveEditId) return;
 
-    if (agentId != null && String(agentId) !== editAgentId) {
-      setEditAgentId(String(agentId));
-    }
- 
-  }, [agentId, mode]);
-
-  useEffect(() => {
-    if (mode !== "edit") return;
+    const controller = new AbortController();
     setIsLoading(true);
 
-    // Prefill from list endpoint data (your backend exposes name/prompt/type/data_file in GET /agents).
-    setName(effectiveInitialAgent?.name ?? "");
-    setPrompt(effectiveInitialAgent?.prompt ?? "");
-    setType(effectiveInitialAgent?.type ?? "normal");
-    setExistingFilePath(effectiveInitialAgent?.data_file ?? null);
+    API.get(`/agents/${effectiveEditId}`, { signal: controller.signal })
+      .then(res => {
+        if (res.data?.error) throw new Error(res.data.error);
 
-    if (Array.isArray(effectiveInitialAgent?.child_agent_ids))
-      setSelectedHandoffs(effectiveInitialAgent.child_agent_ids);
-    if (Array.isArray(effectiveInitialAgent?.handoffs))
-      setSelectedHandoffs(effectiveInitialAgent.handoffs);
+        const agent = res.data.agent;
+        const rawType = agent?.type ?? "normal";
+        setName(agent?.name ?? "");
+        setPrompt(agent?.prompt ?? "");
+        setType(rawType === "base" ? "normal" : rawType);
+        setExistingFilePath(agent?.data_file ?? null);
 
-    setIsLoading(false);
-  }, [mode, effectiveInitialAgent]);
+        const children = res.data.child_agent_ids ?? [];
+        const selfId = Number(effectiveEditId);
+        setSelectedHandoffs(children.filter(id => id !== selfId));
+      })
+      .catch(err => {
+        if (err?.code === "ERR_CANCELED" || err?.name === "CanceledError") return;
+        setName("");
+        setPrompt("");
+        setType("normal");
+        setExistingFilePath(null);
+        setSelectedHandoffs([]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
 
+    return () => controller.abort();
+  }, [mode, effectiveEditId]);
+
+  // Clear handoffs if type is no longer super
   useEffect(() => {
-    // If user switches from super -> normal, clear handoff selection.
     if (type !== "super") setSelectedHandoffs([]);
   }, [type]);
 
@@ -74,10 +90,11 @@ export default function CreateAgent({
     if (!canSave || isSaving || isLoading) return;
 
     setIsSaving(true);
+    setNameError(""); // reset previous errors
     try {
       let filePath = existingFilePath ?? null;
 
-      // Upload file if exists.
+      // Upload file if exists
       if (file) {
         const formData = new FormData();
         formData.append("file", file);
@@ -92,53 +109,79 @@ export default function CreateAgent({
         data_file: filePath,
       };
 
-      let savedId = agentId ?? (mode === "edit" ? effectiveEditId : null);
+      let savedId = null;
 
-      if (mode === "edit" && agentId) {
-        // Update agent (backend route: PUT /agents/{agent_id})
-        await API.put(`/agents/${agentId}`, payload);
-      } else if (mode === "edit" && effectiveEditId) {
+      if (mode === "edit") {
         await API.put(`/agents/${effectiveEditId}`, payload);
+        savedId = effectiveEditId;
       } else {
-        // Create agent.
         const res = await API.post("/agents", payload);
         savedId = res.data.id;
       }
 
-      // Add handoffs if super.
-      if (type === "super" && selectedHandoffs.length > 0 && savedId) {
+      // Handle handoffs if super-agent
+      if (mode === "edit" && savedId) {
+        await API.put(`/agents/${Number(savedId)}/handoffs`, {
+          child_agent_ids: type === "super" ? selectedHandoffs : [],
+        });
+      } else if (type === "super" && selectedHandoffs.length > 0 && savedId) {
         await API.post(`/agents/${savedId}/handoffs`, {
-          child_agent_ids: selectedHandoffs
+          child_agent_ids: selectedHandoffs,
         });
       }
 
-      // Show toast after refresh.
+      //  Close modal on success only
       sessionStorage.setItem("toastType", "success");
       sessionStorage.setItem(
         "toastMessage",
         mode === "edit" ? "Agent updated successfully." : "Agent created successfully."
       );
-
       onClose?.();
       window.location.reload();
+
     } catch (err) {
+      //  Keep modal open, show error toast
       const message =
         err?.response?.data?.detail ||
+        err?.response?.data?.error ||
         err?.response?.data?.message ||
         err?.message ||
         (mode === "edit" ? "Failed to update agent." : "Failed to create agent.");
 
+      // Highlight name if duplicate
+      if (message.toLowerCase().includes("already exists")) {
+        setNameError(message);
+      }
+
       sessionStorage.setItem("toastType", "error");
       sessionStorage.setItem("toastMessage", message);
-
-      onClose?.();
-      window.location.reload();
+      console.error("Agent save failed:", message);
     } finally {
       setIsSaving(false);
     }
   };
 
-  return (
+  const handleDelete = async () => {
+    if (!effectiveEditId) return;
+
+
+    try {
+      await API.delete(`/agents/${effectiveEditId}`);
+      sessionStorage.setItem("toastType", "success");
+      sessionStorage.setItem("toastMessage", "Agent deleted successfully.");
+      onClose?.();
+      window.location.reload();
+    } catch (err) {
+      const message =
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to delete agent.";
+      sessionStorage.setItem("toastType", "error");
+      sessionStorage.setItem("toastMessage", message);
+    }
+  };
+return (
+  <>
     <div
       className="modalOverlay"
       role="dialog"
@@ -148,6 +191,7 @@ export default function CreateAgent({
       }}
     >
       <div className="modal glass">
+        {/* Modal Header */}
         <div className="modalHeader">
           <div>
             <div className="modalTitle">{mode === "edit" ? "Edit Agent" : "Create Agent"}</div>
@@ -155,16 +199,14 @@ export default function CreateAgent({
               Configure name, prompt, type, optional file, and super-agent handoffs.
             </div>
           </div>
-
-          <button className="iconBtn" type="button" onClick={() => onClose?.()}>
-            ✕
-          </button>
+          <button className="iconBtn" type="button" onClick={() => onClose?.()}>✕</button>
         </div>
 
+        {/* Modal Body */}
         <div className="modalBody">
-          {isLoading ? <div className="muted">Loading agent...</div> : null}
+          {isLoading && <div className="muted">Loading agent...</div>}
 
-          {mode === "edit" ? (
+          {mode === "edit" && (
             <div className="field">
               <label className="label">Select agent to edit</label>
               <div className="selectWrap">
@@ -179,25 +221,27 @@ export default function CreateAgent({
                 >
                   <option value="">Choose an agent</option>
                   {agents.map(a => (
-                    <option key={a.id} value={String(a.id)}>
-                      {a.name}
-                    </option>
+                    <option key={a.id} value={String(a.id)}>{a.name}</option>
                   ))}
                 </select>
               </div>
             </div>
-          ) : null}
+          )}
 
           <div className="formGrid">
             <div className="field">
               <label className="label">Name</label>
               <input
-                className="input"
+                className={`input ${nameError ? "inputError" : ""}`}
                 placeholder="Agent Name"
                 value={name}
-                onChange={e => setName(e.target.value)}
+                onChange={e => {
+                  setName(e.target.value);
+                  setNameError("");
+                }}
                 disabled={mode === "edit" && !effectiveEditId}
               />
+              {nameError && <div className="fieldError">{nameError}</div>}
             </div>
 
             <div className="field">
@@ -236,35 +280,34 @@ export default function CreateAgent({
                 onChange={e => setFile(e.target.files?.[0] || null)}
                 disabled={mode === "edit" && !effectiveEditId}
               />
-              {file ? <div className="fileMeta">{file.name}</div> : null}
-              {!file && existingFilePath ? (
+              {file && <div className="fileMeta">{file.name}</div>}
+              {!file && existingFilePath && (
                 <div className="fileMeta" title={existingFilePath}>
                   Current: {existingFilePath}
                 </div>
-              ) : null}
+              )}
             </div>
           </div>
 
-          {type === "super" ? (
+          {type === "super" && (
             <div className="field">
               <label className="label">Handoff to child agents</label>
               <div className="handoffList">
-                {agents.length === 0 ? (
-                  <div className="muted">No agents available yet.</div>
+                {handoffCandidates.length === 0 ? (
+                  <div className="muted">
+                    {mode === "edit" && effectiveEditId && agents.length <= 1
+                      ? "Add more agents first, or only other agents can be handoff targets."
+                      : "No agents available yet."}
+                  </div>
                 ) : (
-                  agents.map(a => (
+                  handoffCandidates.map(a => (
                     <label key={a.id} className="checkRow">
                       <input
                         type="checkbox"
                         checked={selectedHandoffs.includes(a.id)}
                         onChange={e => {
-                          if (e.target.checked) {
-                            setSelectedHandoffs(prev => [...prev, a.id]);
-                          } else {
-                            setSelectedHandoffs(prev =>
-                              prev.filter(id => id !== a.id)
-                            );
-                          }
+                          if (e.target.checked) setSelectedHandoffs(prev => [...prev, a.id]);
+                          else setSelectedHandoffs(prev => prev.filter(id => id !== a.id));
                         }}
                       />
                       <span className="checkLabel">{a.name}</span>
@@ -273,18 +316,32 @@ export default function CreateAgent({
                   ))
                 )}
               </div>
-
               <div className="hint">
-                Select at least one agent to link as a handoff target.
+                {mode === "edit" && effectiveEditId
+                  ? "Current handoffs are pre-selected. You cannot hand off to the agent you are editing."
+                  : "Select at least one agent to link as a handoff target."}
               </div>
             </div>
-          ) : null}
+          )}
         </div>
 
+        {/* Modal Footer */}
         <div className="modalFooter">
           <button className="btnGhost" type="button" onClick={() => onClose?.()}>
             Cancel
           </button>
+
+          {mode === "edit" && effectiveEditId && (
+            <button
+              className="btnDanger"
+              type="button"
+              onClick={() => setShowDeleteConfirm(true)}
+              disabled={isSaving || isLoading}
+            >
+              Delete Agent
+            </button>
+          )}
+
           <button
             className="btnPrimary"
             type="button"
@@ -296,5 +353,41 @@ export default function CreateAgent({
         </div>
       </div>
     </div>
-  );
+
+    {/* Delete Confirmation Modal */}
+    {showDeleteConfirm && (
+      <div
+        className="modalOverlay"
+        onMouseDown={e => { if (e.target === e.currentTarget) setShowDeleteConfirm(false); }}
+      >
+        <div className="modal glass">
+          <div className="modalHeader">
+            <div>
+              <div className="modalTitle">Confirm Delete</div>
+              <div className="modalSubtitle">
+                Are you sure you want to permanently delete this agent? This action cannot be undone.
+              </div>
+            </div>
+            <button className="iconBtn" type="button" onClick={() => setShowDeleteConfirm(false)}>✕</button>
+          </div>
+          <div className="modalBody">
+            <p className="muted">
+              Deleting an agent will remove it permanently from the system.
+            </p>
+          </div>
+          <div className="modalFooter">
+            <button className="btnGhost" type="button" onClick={() => setShowDeleteConfirm(false)}>Cancel</button>
+            <button
+              className="btnDanger"
+              type="button"
+              onClick={() => { setShowDeleteConfirm(false); handleDelete(); }}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
+);
 }

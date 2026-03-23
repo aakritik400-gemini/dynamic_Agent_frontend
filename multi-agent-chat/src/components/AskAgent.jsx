@@ -6,12 +6,12 @@ export default function AskAgent({
   agentId: agentIdProp,
   onAgentIdChange,
 }) {
-  const [agentsLocal, setAgentsLocal] = useState([]);
-  const [agentIdLocal, setAgentIdLocal] = useState("");
-  const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState([]);
-  const [isAsking, setIsAsking] = useState(false);
-  const listRef = useRef(null);
+  const [agentsLocal, setAgentsLocal] = useState([]); // store list of agents for dropdown, only used if not provided by parent
+  const [agentIdLocal, setAgentIdLocal] = useState(""); //store selected agent id 
+  const [question, setQuestion] = useState(""); // what user types stays here until they send, then it moves to messages as a user message
+  const [messages, setMessages] = useState([]); // chat history
+  const [isAsking, setIsAsking] = useState(false); // loading state "thinking "
+  const listRef = useRef(null); // used to auto scroll to the latest message
 
   useEffect(() => {
     if (agentsProp) return;
@@ -44,31 +44,40 @@ export default function AskAgent({
     return true;
   }, [agentId, question, isAsking]);
 
-  const ask = async () => {
-    if (!canSend) return;
+ const ask = async () => {
+  if (!canSend) return;
 
-    const q = question.trim();
-    setQuestion("");
+  const q = question.trim();
+  setQuestion("");
 
-    setMessages(prev => [...prev, { role: "user", content: q }]);
-    setIsAsking(true);
-    try {
-      const res = await API.post(`/ask/${agentId}`, { question: q });
-      setMessages(prev => [
-        ...prev,
-        { role: "assistant", content: res.data.response ?? "" }
-      ]);
-    } catch (err) {
-      const message =
-        err?.response?.data?.detail ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Failed to get response.";
-      setMessages(prev => [...prev, { role: "assistant", content: message }]);
-    } finally {
-      setIsAsking(false);
-    }
-  };
+  setMessages(prev => [...prev, { role: "user", content: q }]);
+  setIsAsking(true);
+
+  try {
+    const res = await API.post(`/ask/${agentId}`, { question: q });
+
+    const reply =
+      res?.data?.response?.trim() || " No response from agent. Please try again.";
+
+    setMessages(prev => [
+      ...prev,
+      { role: "assistant", content: reply }
+    ]);
+  } catch (err) {
+    const message =
+      err?.response?.data?.detail ||
+      err?.response?.data?.message ||
+      err?.message ||
+      " Failed to get response from server.";
+
+    setMessages(prev => [
+      ...prev,
+      { role: "assistant", content: message }
+    ]);
+  } finally {
+    setIsAsking(false);
+  }
+};
 
   return (
     <div className="glass chatCard">
@@ -86,7 +95,9 @@ export default function AskAgent({
               value={agentId}
               onChange={e => setAgentId(e.target.value)}
             >
-              <option value="">Choose an agent</option>
+              <option value="" hidden selected>
+                Choose an agent
+              </option>
               {agents.map(a => (
                 <option key={a.id} value={String(a.id)}>
                   {a.name}

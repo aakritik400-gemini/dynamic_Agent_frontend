@@ -6,7 +6,27 @@ html,
 body {
   height: 100%;
 }
+.btnDanger {
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: white;
+  background: linear-gradient(135deg, rgba(255, 71, 87, 0.9), rgba(198, 40, 40, 0.9));
+  border-radius: 14px;
+  padding: 10px 14px;
+  font-weight: 700;
+  transition: transform 120ms ease, filter 120ms ease;
+}
 
+.btnDanger:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.btnDanger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
 body {
   margin: 0;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica,
@@ -66,7 +86,8 @@ body {
 
 .mainArea {
   width: min(1080px, calc(100% - 24px));
-  margin: 16px auto 40px;
+  margin: 16px auto 60px ;
+  margin-bottom: 10px;
 }
 
 .btnPrimary {
@@ -215,18 +236,18 @@ body {
   min-height: 96px;
   resize: none;
 }
-
 .chatCard {
   margin-top: 16px;
-  max-height: min(720px, calc(100dvh - 220px));
-  min-height: 460px;
+  width: 100%; /* take full width of mainArea */
+  height: calc(100vh - 100px); /* full viewport height minus header/topbar */
+  min-height: 460px; /* optional: keep a minimum */
   display: flex;
   flex-direction: column;
   padding: 16px;
   position: relative;
   overflow: hidden;
+  border-radius: 18px;
 }
-
 .chatCard::before {
   content: "";
   position: absolute;
@@ -526,4 +547,40 @@ body {
 .muted {
   color: rgba(255, 255, 255, 0.62);
   font-size: 13px;
+}
+) {
+  .topbar {
+    width: calc(100% - 32px); /* more side space on medium screens */
+    padding: 12px 12px;
+  }
+  .mainArea {
+    width: calc(100% - 32px);
+    margin: 12px auto 32px;
+  }
+  .chatCard {
+    height: calc(100vh - 120px);
+    padding: 12px;
+  }
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    width: calc(100% - 24px); /* smaller spacing */
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .mainArea {
+    width: calc(100% - 24px);
+    margin: 12px auto 24px;
+  }
+  .chatCard {
+    height: calc(100vh - 100px);
+    padding: 10px;
+    border-radius: 14px;
+  }
+  .agentSelect {
+    width: 100%; /* responsive agent select dropdown */
+  }
 }
